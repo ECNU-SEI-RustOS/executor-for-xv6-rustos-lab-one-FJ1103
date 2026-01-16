@@ -117,8 +117,8 @@ impl ProcData {
             name: [0; 16],
             open_files: array![_ => None; NFILE],
             tf: ptr::null_mut(),
-            tf: ptr::null_mut(),
             // 初始化 trace_mask
+            trace_mask: 0,
             pagetable: None,
             cwd: None,
         }
@@ -497,7 +497,85 @@ impl Proc {
     /// - 使用了 `unsafe` 获取 TrapFrame 裸指针，假设指针有效且唯一所有权。
     /// - 该函数应在内核上下文且进程排他访问时调用，避免数据竞争。
     /// - 系统调用执行过程中可能包含更底层的 `unsafe`，调用此函数时需确保整体安全环境。
-pub fn syscall(&mut self) {
+    
+    pub fn syscall(&mut self) {
+        sstatus::intr_on();
+
+        // 1. 定义系统调用名称数组
+        let syscall_names = [
+            "", "fork", "exit", "wait", "pipe", "read", 
+            "kill", "exec", "fstat", "chdir", "dup", 
+            "getpid", "sbrk", "sleep", "uptime", "open", 
+            "write", "mknod", "unlink", "link", "mkdir", 
+            "close", "trace" 
+        ];
+
+        // -----------------------------------------------------------
+        // 第一阶段：读取系统调用号 (a7)
+        // -----------------------------------------------------------
+        let a7 = {
+            // 这是一个临时作用域
+            let pd = self.data.get_mut();
+            let tf = unsafe { pd.tf.as_mut().unwrap() };
+            let n = tf.a7;
+            tf.admit_ecall(); // 处理 ecall
+            n // 返回系统调用号，随后 pd 和 tf 在这里被释放
+        }; 
+
+        // -----------------------------------------------------------
+        // 第二阶段：执行系统调用 (此时 self 没有被借用，安全！)
+        // -----------------------------------------------------------
+        let sys_result = match a7 {
+            1 => self.sys_fork(),
+            2 => self.sys_exit(),
+            3 => self.sys_wait(),
+            4 => self.sys_pipe(),
+            5 => self.sys_read(),
+            6 => self.sys_kill(),
+            7 => self.sys_exec(),
+            8 => self.sys_fstat(),
+            9 => self.sys_chdir(),
+            10 => self.sys_dup(),
+            11 => self.sys_getpid(),
+            12 => self.sys_sbrk(),
+            13 => self.sys_sleep(),
+            14 => self.sys_uptime(),
+            15 => self.sys_open(),
+            16 => self.sys_write(),
+            17 => self.sys_mknod(),
+            18 => self.sys_unlink(),
+            19 => self.sys_link(),
+            20 => self.sys_mkdir(),
+            21 => self.sys_close(),
+            22 => self.sys_trace(),
+            _ => {
+                panic!("unknown syscall num: {}", a7);
+            }
+        };
+
+        // -----------------------------------------------------------
+        // 第三阶段：写回返回值并打印 (重新借用 self.data)
+        // -----------------------------------------------------------
+        let pd = self.data.get_mut(); // 重新借用
+        let tf = unsafe { pd.tf.as_mut().unwrap() };
+        
+        let ret_val = match sys_result {
+            Ok(ret) => ret,
+            Err(()) => -1isize as usize,
+        };
+        tf.a0 = ret_val;
+
+        // 打印追踪信息
+        if (pd.trace_mask >> a7) & 1 == 1 {
+            let pid = self.excl.lock().pid;
+            let name = if a7 < syscall_names.len() {
+                syscall_names[a7]
+            } else {
+                "unknown"
+            };
+            println!("{}: syscall {} -> {}", pid, name, ret_val);
+        }
+    }
         sstatus::intr_on();
 
         // 1. 定义系统调用名称数组 (对应 include/syscall.h)
