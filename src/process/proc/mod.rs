@@ -573,7 +573,7 @@ impl Proc {
             } else {
                 "unknown"
             };
-            println!("{}: syscall {} -> {}", pid, name, ret_val);
+            println!("{}: syscall {} -> {}", pid, name, ret_val as isize);
         }
     }
         
