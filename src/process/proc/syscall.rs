@@ -39,6 +39,7 @@ pub trait Syscall {
     fn sys_link(&mut self) -> SysResult;
     fn sys_mkdir(&mut self) -> SysResult;
     fn sys_close(&mut self) -> SysResult;
+    fn sys_trace(&mut self) -> SysResult;
 }
 
 impl Syscall for Proc {
@@ -53,7 +54,22 @@ impl Syscall for Proc {
 
         ret
     }
+// 【新增】sys_trace 实现
+    fn sys_trace(&mut self) -> SysResult {
+        // 1. 获取系统调用的第 0 个参数 (mask)
+        let mask = self.arg_i32(0);
+        
+        // 2. 将 mask 保存到进程数据中
+        // (前提是你已经在 mod.rs 的 ProcData 结构体中添加了 trace_mask 字段)
+        self.data.get_mut().trace_mask = mask;
 
+        // 3. 打印调试信息 (可选，根据 trace_syscall 特性决定)
+        #[cfg(feature = "trace_syscall")]
+        println!("[{}].trace(mask={:#b})", self.excl.lock().pid, mask);
+
+        // 4. 返回成功 (0)
+        Ok(0)
+    }
     /// Exit the current process normally.
     /// Note: This function call will not return.
     fn sys_exit(&mut self) -> SysResult {
@@ -191,6 +207,12 @@ impl Syscall for Proc {
         if result.is_err() {
             syscall_warning(error);
         }
+
+        // 【插入在这里】
+    if self.excl.lock().pid == 1 {
+        // 现在 vm_print 已经实现了，确保这一行代码是生效的（取消注释）
+        self.data.get_mut().pagetable.as_ref().unwrap().vm_print(0);
+    }
         result
     }
 

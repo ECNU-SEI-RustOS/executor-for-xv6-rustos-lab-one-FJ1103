@@ -290,6 +290,49 @@ impl PageTable {
     /// - 分配的页表页必须正确释放，否则会导致内存泄漏。  
     /// - 修改页表结构必须保证单线程或同步，避免并发写入冲突。  
     /// - 返回的可变引用指向底层内存，调用者应确保使用时内存有效且无数据竞争。
+    /// 
+    /// 
+    /// 
+    /// 
+    /// 递归打印页表结构
+    /// level: 当前层级 (0: 顶层, 1: 中间层, 2: 底层) 
+    /// 注意：RISC-V SV39 通常 level 2 是顶层，level 0 是叶子，但实验输出要求缩进对应层级深度
+    /// 这里的 level 参数代表递归深度：0=顶层, 1=第二层, 2=第三层
+    pub fn vm_print(&self, level: usize) {
+        // 仅在顶层打印一次表头
+        if level == 0 {
+            println!("page table {:#x}", self as *const _ as usize);
+        }
+
+        // 遍历 512 个页表项
+        for (i, pte) in self.data.iter().enumerate() {
+            // 只有有效的页表项才打印
+            if pte.is_valid() {
+                // 1. 打印缩进：根据层级打印 " .."
+                for _ in 0..=level {
+                    print!(" ..");
+                }
+                
+                // 2. 打印当前项信息：索引、PTE内容、物理地址
+                // 注意：pte.data 是原始值，pte.as_phys_addr() 获取物理地址
+                println!("{}: pte {:#x} pa {:#x}", i, pte.data, pte.as_phys_addr().as_usize());
+
+                // 3. 递归：如果指向下一级页表（非叶子节点），则继续深入
+                // SV39 中，如果 R/W/X 位全为 0，则指向下一级页表
+                // 这里可以使用你的 pte.is_leaf() 判断，如果不是 leaf 就要递归
+                if !pte.is_leaf() {
+                    // 获取下一级页表的指针
+                    let child_pgt_ptr = pte.as_page_table();
+                    // 将裸指针转换为引用进行递归调用
+                    unsafe {
+                        let child_pgt = &*child_pgt_ptr;
+                        child_pgt.vm_print(level + 1);
+                    }
+                }
+            }
+        }
+    }
+
     fn walk_alloc(&mut self, va: VirtAddr) -> Option<&mut PageTableEntry> {
         let mut pgt = self as *mut PageTable;
         for level in (1..=2).rev() {

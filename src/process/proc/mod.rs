@@ -99,6 +99,9 @@ pub struct ProcData {
     /// 指向 TrapFrame 的裸指针，保存用户态寄存器临时值等信息。
     pub tf: *mut TrapFrame,
     /// 进程的用户页表，管理用户地址空间映射。
+    
+    // 在这里添加 trace_mask
+    pub trace_mask: i32,
     pub pagetable: Option<Box<PageTable>>,
     /// 进程当前工作目录的 inode。
     pub cwd: Option<Inode>,
@@ -114,6 +117,8 @@ impl ProcData {
             name: [0; 16],
             open_files: array![_ => None; NFILE],
             tf: ptr::null_mut(),
+            tf: ptr::null_mut(),
+            // 初始化 trace_mask
             pagetable: None,
             cwd: None,
         }
@@ -492,12 +497,25 @@ impl Proc {
     /// - 使用了 `unsafe` 获取 TrapFrame 裸指针，假设指针有效且唯一所有权。
     /// - 该函数应在内核上下文且进程排他访问时调用，避免数据竞争。
     /// - 系统调用执行过程中可能包含更底层的 `unsafe`，调用此函数时需确保整体安全环境。
-    pub fn syscall(&mut self) {
+pub fn syscall(&mut self) {
         sstatus::intr_on();
 
-        let tf = unsafe { self.data.get_mut().tf.as_mut().unwrap() };
-        let a7 = tf.a7;
+        // 1. 定义系统调用名称数组 (对应 include/syscall.h)
+        // 注意：第0项占位，第1项是 fork，顺序必须严格一致
+        let syscall_names = [
+            "", "fork", "exit", "wait", "pipe", "read", 
+            "kill", "exec", "fstat", "chdir", "dup", 
+            "getpid", "sbrk", "sleep", "uptime", "open", 
+            "write", "mknod", "unlink", "link", "mkdir", 
+            "close", "trace" 
+        ];
+
+        // 获取 ProcData 的可变引用，方便后续访问 trace_mask 和 tf
+        let pd = self.data.get_mut();
+        let tf = unsafe { pd.tf.as_mut().unwrap() };
+        let a7 = tf.a7; // a7 寄存器保存了系统调用号
         tf.admit_ecall();
+
         let sys_result = match a7 {
             1 => self.sys_fork(),
             2 => self.sys_exit(),
@@ -520,14 +538,30 @@ impl Proc {
             19 => self.sys_link(),
             20 => self.sys_mkdir(),
             21 => self.sys_close(),
+            22 => self.sys_trace(), // 【新增】注册 trace 系统调用
             _ => {
                 panic!("unknown syscall num: {}", a7);
             }
         };
-        tf.a0 = match sys_result {
+
+        // 处理返回值
+        let ret_val = match sys_result {
             Ok(ret) => ret,
             Err(()) => -1isize as usize,
         };
+        tf.a0 = ret_val;
+
+        // 【新增】追踪打印逻辑
+        // 检查 mask 的第 a7 位是否为 1
+        if (pd.trace_mask >> a7) & 1 == 1 {
+            let pid = self.excl.lock().pid;
+            let name = if a7 < syscall_names.len() {
+                syscall_names[a7]
+            } else {
+                "unknown"
+            };
+            println!("{}: syscall {} -> {}", pid, name, ret_val);
+        }
     }
 
     /// # 功能说明
