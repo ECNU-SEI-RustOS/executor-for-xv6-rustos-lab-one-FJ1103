@@ -576,72 +576,7 @@ impl Proc {
             println!("{}: syscall {} -> {}", pid, name, ret_val);
         }
     }
-        sstatus::intr_on();
-
-        // 1. 定义系统调用名称数组 (对应 include/syscall.h)
-        // 注意：第0项占位，第1项是 fork，顺序必须严格一致
-        let syscall_names = [
-            "", "fork", "exit", "wait", "pipe", "read", 
-            "kill", "exec", "fstat", "chdir", "dup", 
-            "getpid", "sbrk", "sleep", "uptime", "open", 
-            "write", "mknod", "unlink", "link", "mkdir", 
-            "close", "trace" 
-        ];
-
-        // 获取 ProcData 的可变引用，方便后续访问 trace_mask 和 tf
-        let pd = self.data.get_mut();
-        let tf = unsafe { pd.tf.as_mut().unwrap() };
-        let a7 = tf.a7; // a7 寄存器保存了系统调用号
-        tf.admit_ecall();
-
-        let sys_result = match a7 {
-            1 => self.sys_fork(),
-            2 => self.sys_exit(),
-            3 => self.sys_wait(),
-            4 => self.sys_pipe(),
-            5 => self.sys_read(),
-            6 => self.sys_kill(),
-            7 => self.sys_exec(),
-            8 => self.sys_fstat(),
-            9 => self.sys_chdir(),
-            10 => self.sys_dup(),
-            11 => self.sys_getpid(),
-            12 => self.sys_sbrk(),
-            13 => self.sys_sleep(),
-            14 => self.sys_uptime(),
-            15 => self.sys_open(),
-            16 => self.sys_write(),
-            17 => self.sys_mknod(),
-            18 => self.sys_unlink(),
-            19 => self.sys_link(),
-            20 => self.sys_mkdir(),
-            21 => self.sys_close(),
-            22 => self.sys_trace(), // 【新增】注册 trace 系统调用
-            _ => {
-                panic!("unknown syscall num: {}", a7);
-            }
-        };
-
-        // 处理返回值
-        let ret_val = match sys_result {
-            Ok(ret) => ret,
-            Err(()) => -1isize as usize,
-        };
-        tf.a0 = ret_val;
-
-        // 【新增】追踪打印逻辑
-        // 检查 mask 的第 a7 位是否为 1
-        if (pd.trace_mask >> a7) & 1 == 1 {
-            let pid = self.excl.lock().pid;
-            let name = if a7 < syscall_names.len() {
-                syscall_names[a7]
-            } else {
-                "unknown"
-            };
-            println!("{}: syscall {} -> {}", pid, name, ret_val);
-        }
-    }
-
+        
     /// # 功能说明
     /// 让出当前进程的 CPU 使用权，将进程状态从运行中（RUNNING）
     /// 改为可运行（RUNNABLE），并调用调度器进行上下文切换，
@@ -795,6 +730,7 @@ impl Proc {
             ptr::copy_nonoverlapping(pdata.tf, cdata.tf, 1);
             cdata.tf.as_mut().unwrap().a0 = 0;
         }
+        cdata.trace_mask = pdata.trace_mask;  // <--- 添加这一行
 
         // clone opened files and cwd
         cdata.open_files.clone_from(&pdata.open_files);
